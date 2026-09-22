@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+DISK="/dev/nvme0n1"
+LUKS_NAME="crypt-btrfs"
+
+wipefs -af "$DISK"
+sgdisk --zap-all "$DISK"
+
+sgdisk -n 1:0:+512M  -t 1:ef00 -c 1:"ESP"        "$DISK"
+sgdisk -n 2:0:+4096M -t 2:ea00 -c 2:"BOOT"       "$DISK"
+sgdisk -n 3:0:0      -t 3:8309 -c 3:"LUKS_BTRFS" "$DISK"
+
+partprobe "$DISK"
+sleep 1
+
+mkfs.fat -F 32 -n "EFI" "${DISK}p1"
+mkfs.ext4 -F -L "BOOT" "${DISK}p2"
+
+cryptsetup luksFormat --type luks2 "${DISK}p3"
+cryptsetup open "${DISK}p3" "$LUKS_NAME"
+mkfs.btrfs -f -L "BTRFS_ROOT" "/dev/mapper/${LUKS_NAME}"
+
+mount -t btrfs -o rw,noatime,ssd,discard=async,space_cache=v2 "/dev/mapper/${LUKS_NAME}" /mnt
+btrfs subvolume create /mnt/@
+btrfs subvolume create /mnt/@.snapshots
+btrfs subvolume create /mnt/@home
+btrfs subvolume create /mnt/@home.snapshots
+btrfs subvolume create /mnt/@swap
+btrfs subvolume create /mnt/@var
+umount /mnt
+
+mount -t btrfs -o rw,noatime,ssd,discard=async,space_cache=v2,compress=zstd:1,subvol=@ "/dev/mapper/${LUKS_NAME}" /mnt
+
+mkdir -p /mnt/.snapshots
+mkdir -p /mnt/home
+mkdir -p /mnt/swap
+mkdir -p /mnt/var
+mkdir -p /mnt/boot
+
+mount -t ext4 -o rw,noatime,discard "/dev/${DISK##*/}p2" /mnt/boot
+
+mount -t btrfs -o rw,noatime,ssd,discard=async,space_cache=v2,compress=zstd:1,subvol=@home "/dev/mapper/${LUKS_NAME}" /mnt/home
+mount -t btrfs -o rw,noatime,ssd,discard=async,space_cache=v2,compress=zstd:1,subvol=@.snapshots "/dev/mapper/${LUKS_NAME}" /mnt/.snapshots
+mount -t btrfs -o rw,noatime,ssd,discard=async,space_cache=v2,compress=zstd:1,subvol=@var "/dev/mapper/${LUKS_NAME}" /mnt/var
+mount -t btrfs -o rw,noatime,ssd,discard=async,space_cache=v2,compress=none,subvol=@swap "/dev/mapper/${LUKS_NAME}" /mnt/swap
+
+mkdir -p /mnt/home/.snapshots
+mount -t btrfs -o rw,noatime,ssd,discard=async,space_cache=v2,compress=zstd:1,subvol=@home.snapshots "/dev/mapper/${LUKS_NAME}" /mnt/home/.snapshots
+
+mkdir -p /mnt/boot/efi
+mount -t vfat -o rw,noatime,fmask=0077,dmask=0077,discard "/dev/${DISK##*/}p1" /mnt/boot/efi
+
+//-------------------------------------------------------------------------------------------------------
+sudo pacman -Syu
