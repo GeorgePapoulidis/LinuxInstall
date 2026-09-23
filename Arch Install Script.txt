@@ -68,4 +68,31 @@ mkdir -p /mnt/boot/efi
 mount -t vfat -o rw,noatime,fmask=0077,dmask=0077,discard "/dev/${DISK##*/}p1" /mnt/boot/efi
 
 #-------------------------------------------------------------------------------------------------------
-#sudo pacman -Syu
+pacstrap -K /mnt base linux linux-firmware amd-ucode btrfs-progs cryptsetup vim grub efibootmgr
+genfstab -U /mnt >> /mnt/etc/fstab
+
+arch-chroot -S /mnt /bin/bash << EOF
+sed -i '/^#en_US.UTF-8 UTF-8/s/^#//' /etc/locale.gen
+locale-gen
+echo "LANG=en_US.UTF-8" > /etc/locale.conf
+echo "arch-main" > /etc/hostname
+ln -sf /usr/share/zoneinfo/Europe/Athens /etc/localtime
+hwclock --systohc
+
+sed -i 's/\bblock\b/& encrypt/' /etc/mkinitcpio.conf
+mkinitcpio -P
+passwd < /dev/tty
+
+UUID=\$(blkid -s UUID -o value "${DISK}p3")
+sed -i "s|^GRUB_CMDLINE_LINUX_DEFAULT=.*|GRUB_CMDLINE_LINUX_DEFAULT=\"loglevel=3 quiet cryptdevice=UUID=\${UUID}:${MAPPER_NAME} root=/dev/mapper/${MAPPER_NAME} rootflags=subvol=${SUBVOL_ROOT}\"|" /etc/default/grub
+
+grub-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id="NVME MAIN GRUB"
+grub-mkconfig -o /boot/grub/grub.cfg
+EOF
+
+umount -R /mnt
+reboot
+#-------------------------------------------------------------------------------------------------------
+#systemctl enable systemd-networkd systemd-resolved
+#sudo pacman -Syu nvim e2fsprogs dosfstools man info
+
