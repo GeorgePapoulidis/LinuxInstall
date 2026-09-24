@@ -79,12 +79,13 @@ echo "arch-main" > /etc/hostname
 ln -sf /usr/share/zoneinfo/Europe/Athens /etc/localtime
 hwclock --systohc
 
-sed -i 's/\bblock\b/& encrypt/' /etc/mkinitcpio.conf
+sed -i 's/^MODULES=(.*/MODULES=(nvme)/' /etc/mkinitcpio.conf
+sed -i 's/^HOOKS=.*/HOOKS=(base systemd autodetect microcode modconf keyboard sd-vconsole block sd-encrypt btrfs filesystems fsck)/' /etc/mkinitcpio.conf
 mkinitcpio -P
 passwd < /dev/tty
 
 UUID=\$(blkid -s UUID -o value "${DISK}p3")
-sed -i "s|^GRUB_CMDLINE_LINUX_DEFAULT=.*|GRUB_CMDLINE_LINUX_DEFAULT=\"loglevel=3 quiet cryptdevice=UUID=\${UUID}:${MAPPER_NAME} root=/dev/mapper/${MAPPER_NAME} rootflags=subvol=${SUBVOL_ROOT}\"|" /etc/default/grub
+sed -i "s|^GRUB_CMDLINE_LINUX_DEFAULT=.*|GRUB_CMDLINE_LINUX_DEFAULT=\"loglevel=3 rd.luks.name=\${UUID}=${MAPPER_NAME} root=/dev/mapper/${MAPPER_NAME} rootflags=subvol=${SUBVOL_ROOT}\"|" /etc/default/grub
 
 grub-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id="NVME MAIN GRUB"
 grub-mkconfig -o /boot/grub/grub.cfg
