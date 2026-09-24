@@ -3,6 +3,9 @@ set -euo pipefail
 
 DISK="/dev/nvme0n1"
 
+HOSTNAME="nvme-main"
+BOOTLOADER_ID="NVME MAIN GRUB"
+
 PARTNAME_EFI="EFI"
 PARTNAME_BOOT="BOOT"
 PARTNAME_LUKS="ENCRYPTED_BTRFS"
@@ -68,32 +71,179 @@ mkdir -p /mnt/boot/efi
 mount -t vfat -o rw,noatime,fmask=0077,dmask=0077,discard "/dev/${DISK##*/}p1" /mnt/boot/efi
 
 #-------------------------------------------------------------------------------------------------------
-pacstrap -K /mnt base linux linux-firmware amd-ucode btrfs-progs cryptsetup vim grub efibootmgr
+pacstrap -K /mnt base linux linux-firmware linux-headers amd-ucode btrfs-progs cryptsetup vim grub efibootmgr plymouth os-prober networkmanager
 genfstab -U /mnt >> /mnt/etc/fstab
 
-arch-chroot -S /mnt /bin/bash << EOF
+arch-chroot -S /mnt /bin/bash 3<&0 << EOF
 sed -i '/^#en_US.UTF-8 UTF-8/s/^#//' /etc/locale.gen
 locale-gen
 echo "LANG=en_US.UTF-8" > /etc/locale.conf
-echo "arch-main" > /etc/hostname
+echo "$HOSTNAME" > /etc/hostname
+echo "KEYMAP=us" > /etc/vconsole.conf
+
+cat << HOSTSEOF > /etc/hosts
+127.0.0.1   localhost
+::1         localhost
+127.0.1.1   $HOSTNAME.localdomain $HOSTNAME
+HOSTSEOF
+
+echo "EDITOR=vim" >> /etc/environment
+echo "VISUAL=vim" >> /etc/environment
+
 ln -sf /usr/share/zoneinfo/Europe/Athens /etc/localtime
 hwclock --systohc
 
+sed -i 's/^#COMPRESSION="cat"/COMPRESSION="cat"/' /etc/mkinitcpio.conf
+
 sed -i 's/^MODULES=(.*/MODULES=(nvme)/' /etc/mkinitcpio.conf
-sed -i 's/^HOOKS=.*/HOOKS=(base systemd autodetect microcode modconf keyboard sd-vconsole block sd-encrypt btrfs filesystems fsck)/' /etc/mkinitcpio.conf
-mkinitcpio -P
-passwd < /dev/tty
+sed -i 's/^HOOKS=.*/HOOKS=(base systemd sd-plymouth autodetect microcode modconf keyboard sd-vconsole block sd-encrypt btrfs filesystems fsck)/' /etc/mkinitcpio.conf
+
+plymouth-set-default-theme -R bgrt
+
+echo "Setting root password:"
+passwd <&3
+
+read -u 3 -p "Enter new username: " USERNAME
+
+useradd -m -s /bin/bash "\$USERNAME"
+usermod -aG wheel "\$USERNAME"
+echo "Setting password for \$USERNAME:"
+passwd "\$USERNAME" <&3
+
+echo "%wheel ALL=(ALL:ALL) ALL" > /etc/sudoers.d/00-wheel
+chmod 0440 /etc/sudoers.d/00-wheel
+visudo -c
 
 UUID=\$(blkid -s UUID -o value "${DISK}p3")
-sed -i "s|^GRUB_CMDLINE_LINUX_DEFAULT=.*|GRUB_CMDLINE_LINUX_DEFAULT=\"loglevel=3 rd.luks.name=\${UUID}=${MAPPER_NAME} root=/dev/mapper/${MAPPER_NAME} rootflags=subvol=${SUBVOL_ROOT}\"|" /etc/default/grub
 
-grub-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id="NVME MAIN GRUB"
+sed -i "s|^GRUB_DEFAULT=.*|GRUB_DEFAULT=0|" /etc/default/grub
+sed -i "s|^GRUB_TIMEOUT=.*|GRUB_TIMEOUT=3|" /etc/default/grub
+sed -i "s|^#GRUB_SAVEDEFAULT=.*|GRUB_SAVEDEFAULT=false|" /etc/default/grub
+sed -i "s|^#GRUB_DISABLE_OS_PROBER=.*|GRUB_DISABLE_OS_PROBER=false|" /etc/default/grub
+sed -i "s|^GRUB_DISTRIBUTOR=.*|GRUB_DISTRIBUTOR=\"$BOOTLOADER_ID\"|" /etc/default/grub
+
+sed -i "s|^GRUB_CMDLINE_LINUX_DEFAULT=.*|GRUB_CMDLINE_LINUX_DEFAULT=\"quiet splash loglevel=3 rd.udev.log_priority=3 rd.luks.name=\${UUID}=${MAPPER_NAME} root=/dev/mapper/${MAPPER_NAME} rootflags=subvol=${SUBVOL_ROOT}\"|" /etc/default/grub
+
+grub-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id="$BOOTLOADER_ID"
 grub-mkconfig -o /boot/grub/grub.cfg
+
+systemctl enable NetworkManager.service
+systemctl enable fstrim.timer
+systemctl enable systemd-timesyncd.service
+
 EOF
 
 umount -R /mnt
 reboot
 #-------------------------------------------------------------------------------------------------------
-#systemctl enable systemd-networkd systemd-resolved
-#sudo pacman -Syu nvim e2fsprogs dosfstools man info
+# ==============================================================================
+# PART 1: REPOSITORIES, PACKAGE MANAGERS, AND INSTALLATIONS
+# ==============================================================================
 
+# 1. Enable Multilib (32-bit support for Steam, Wine, 32-bit graphics)
+sudo sed -i "/\[multilib\]/,/Include/"'s/^#//' /etc/pacman.conf
+
+# 2. Base Devel & yay
+sudo pacman -Syu --needed base-devel git
+git clone https://aur.archlinux.org/yay-bin.git /tmp/yay-bin
+(cd /tmp/yay-bin && makepkg -si --noconfirm)
+rm -rf /tmp/yay-bin
+
+# 3. Flatpak Support
+sudo pacman -S --needed --noconfirm flatpak
+flatpak remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+
+# 4. Native Arch Packages
+sudo pacman -S --needed --noconfirm \
+  nvidia-dkms nvidia-utils lib32-nvidia-utils egl-wayland libva-nvidia-driver \
+  v4l2loopback-dkms v4l2loopback-utils \
+  solaar piper libratbag \
+  pipewire wireplumber pipewire-audio pipewire-pulse pipewire-alsa alsa-utils libfreeaptx pavucontrol easyeffects \
+  bluez bluez-utils blueman cups hplip brightnessctl network-manager-applet \
+  xdg-user-dirs man-db man-pages dosfstools e2fsprogs bash-completion \
+  snapper snap-pac grub-btrfs inotify-tools pacman-contrib reflector zram-generator \
+  cmake ninja clang llvm lld gdb lldb jdk-openjdk lua python python-pip neovim kate \
+  hyprland hyprpaper hyprlock hypridle hyprpicker hyprsunset waybar kitty rofi-wayland dunst zenity \
+  xdg-desktop-portal-hyprland xdg-desktop-portal-gtk polkit-kde-agent grim slurp flameshot obs-studio wl-clipboard cliphist \
+  ttf-jetbrains-mono-nerd noto-fonts noto-fonts-cjk noto-fonts-emoji papirus-icon-theme \
+  thunar thunar-archive-plugin thunar-volman gvfs tumbler p7zip unrar tar unzip zip galculator \
+  btop nvtop smartmontools baobab ncdu zathura zathura-pdf-mupdf fastfetch pkgfile \
+  firefox steam gamescope mangohud lib32-mangohud gamemode lib32-gamemode prism-launcher \
+  wine-staging winetricks wine-mono giflib lib32-giflib libreoffice-fresh mpv loupe gimp keepassxc obsidian \
+  qemu-full virt-manager virt-viewer dnsmasq vde2 bridge-utils libguestfs \
+  docker docker-compose nginx openssh lynis tpm2-tools
+
+# 5. AUR Packages (via yay)
+yay -S --needed --noconfirm \
+  openrazer-meta polychromatic \
+  flutter-bin \
+  vscodium-bin \
+  rustdesk-bin \
+  immich-cli \
+  betterdiscordctl
+
+# 6. Flatpaks
+flatpak install -y flathub \
+  com.heroicgameslauncher.hgl \
+  com.discordapp.Discord \
+  org.onlyoffice.desktopeditors \
+  org.signal.Signal \
+  com.viber.Viber \
+  com.skype.Client \
+  us.zoom.Zoom
+
+# ==============================================================================
+# PART 2: SERVICE ENABLEMENT
+# ==============================================================================
+
+sudo systemctl enable bluetooth.service
+sudo systemctl enable cups.service
+sudo systemctl enable sshd.service
+sudo systemctl enable --now systemd-oomd.service
+sudo systemctl enable --now reflector.timer
+sudo systemctl enable --now snapper-timeline.timer
+sudo systemctl enable --now snapper-cleanup.timer
+sudo systemctl enable --now grub-btrfsd.service
+sudo systemctl enable --now btrfs-scrub@-.timer
+sudo systemctl enable --now libvirtd.service
+sudo systemctl enable --now docker.service
+
+sudo usermod -aG libvirt,kvm,docker,plugdev,gamemode "$USER"
+xdg-user-dirs-update
+sudo pkgfile --update
+sudo grub-mkconfig -o /boot/grub/grub.cfg
+
+# ==============================================================================
+# PART 3: TASKS & CONFIGURATION REFERENCES
+# ==============================================================================
+
+# TASK: Set Pacman ParallelDownloads = 20 in /etc/pacman.conf
+# TASK: Enable Color, VerbosePkgLists, and ILoveCandy in /etc/pacman.conf
+# TASK: Configure pacman package cache cleanup (/var/cache/pacman/pkg/) via a systemd drop-in override for paccache.service to retain exactly 1 prior version of cached packages (-r -k 1) and enable paccache.timer
+# TASK: Configure MAKEFLAGS="-j$(nproc)" in /etc/makepkg.conf so AUR packages compile using all CPU threads
+# TASK: Enable colored output across CLI utilities in ~/.bashrc (ls, dir, vdir, grep, egrep, fgrep, diff, ip, pacman, git, man-pages via less/groff)
+# TASK: Enable command-not-found suggestion handler by adding 'source /usr/share/doc/pkgfile/command-not-found.bash' to ~/.bashrc
+# TASK: Run 'systemd-analyze blame' once post-boot to identify and mask/disable any lagging or unnecessary startup services
+# TASK: Configure dual English (US) and Greek (GR) keyboard layouts in Hyprland (~/.config/hypr/hyprland.conf under input: kb_layout = us,gr with toggle kb_options = grp:alt_shift_toggle)
+# TASK: Configure 4K display scaling and unscaled XWayland in ~/.config/hypr/hyprland.conf (monitor=,preferred,auto,1.5 and xwayland { force_zero_scaling = true })
+# TASK: Configure Variable Refresh Rate (VRR / G-Sync Compatible) in ~/.config/hypr/hyprland.conf under misc: vrr = 2 (fullscreen applications only)
+# TASK: Configure per-window low-latency screen tearing for games in ~/.config/hypr/hyprland.conf: set general: allow_tearing = true and define windowrulev2 = immediate, class:^(steam_app_.*)$
+# TASK: Prepare for future HDR pipeline (when upgrading GPU): enable experimental-hdr option in Hyprland config and launch gamescope with '--hdr-enabled --hdr-sdr-content-nits 400'
+# TASK: Unmute HDMI/DP audio channels in ALSA using alsamixer (F6 -> select NVIDIA GPU -> toggle MM to OO on S/PDIF outputs)
+# TASK: Configure compressed RAM swap by creating /etc/systemd/zram-generator.conf with zram-fraction=1.0 and compression-algorithm=zstd
+# TASK: Configure custom kernel versioning automation: create a pre-transaction pacman hook to archive /boot/vmlinuz-<version>, /boot/initramfs-<version>.img, and /usr/lib/modules/<version> prior to upgrades, keeping signed EFI binaries intact
+# TASK: Implement kernel retention policy: protect user-pinned fallback kernel from deletion, retain ~1-week, ~2-week, and ~1-month archived versions, and run grub-mkconfig to expose them under the GRUB menu
+# TASK: Configure Btrfs & Snapper retention to prevent infinite snapshots:
+#       - Re-link @.snapshots and @home.snapshots subvolumes to Snapper root and home configs
+#       - Set root timeline retention: 5 daily, 10 weekly, 2 monthly
+#       - Set home timeline retention: 4 weekly
+#       - Set snap-pac number retention: NUMBER_LIMIT="5", NUMBER_LIMIT_IMPORTANT="10" to auto-purge package update snapshots
+#       - Enable space-aware cleanup: set SPACE_LIMIT="0.2" so Snapper purges aggressively if free space drops below 20%
+# TASK: Create and deploy ~/.local/bin/check-nvme-space.sh (checking btrfs physical pool usage on nvme0n1) and launch it via Hyprland exec-once to trigger a zenity warning dialog if NVMe usage exceeds 90%
+# TASK: Create uncompressed swapfile in @swap mount and calculate resume_offset for hibernation
+# TASK: Generate secondary LUKS keyfile in /etc/cryptsetup-keys.d/ and add entry to /etc/crypttab
+# TASK: Configure getty@tty1 drop-in for passwordless TTY1 autologin and ~/.bash_profile for Hyprland auto-start
+# TASK: Setup Neovim plugins (tokyonight.nvim, telescope.nvim, mason.nvim, nvim-cmp, and language LSPs)
+# TASK: Inject BetterDiscord into Flatpak/Native Discord using betterdiscordctl
+# TASK: Create isolated 'steam' user for running dedicated Palworld server (or deploy via Docker)
+# TASK: Configure Hyprland autostart scripts (hyprpaper, waybar, dunst, cliphist, polkit agent)
