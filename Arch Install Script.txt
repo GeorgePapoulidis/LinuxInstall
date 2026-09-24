@@ -96,7 +96,7 @@ hwclock --systohc
 sed -i 's/^#COMPRESSION="cat"/COMPRESSION="cat"/' /etc/mkinitcpio.conf
 
 sed -i 's/^MODULES=(.*/MODULES=(nvme)/' /etc/mkinitcpio.conf
-sed -i 's/^HOOKS=.*/HOOKS=(base systemd sd-plymouth autodetect microcode modconf keyboard sd-vconsole block sd-encrypt btrfs filesystems fsck)/' /etc/mkinitcpio.conf
+sed -i 's/^HOOKS=.*/HOOKS=(base systemd sd-plymouth autodetect microcode modconf keyboard sd-vconsole numlock block sd-encrypt btrfs filesystems fsck)/' /etc/mkinitcpio.conf
 
 plymouth-set-default-theme -R bgrt
 
@@ -155,28 +155,35 @@ flatpak remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.f
 
 # 4. Native Arch Packages
 sudo pacman -S --needed --noconfirm \
-  nvidia-dkms nvidia-utils lib32-nvidia-utils egl-wayland libva-nvidia-driver \
+  nvidia-dkms nvidia-utils lib32-nvidia-utils egl-wayland libva-nvidia-driver libva-utils \
   v4l2loopback-dkms v4l2loopback-utils \
-  solaar piper libratbag \
+  solaar piper libratbag openrgb \
   pipewire wireplumber pipewire-audio pipewire-pulse pipewire-alsa alsa-utils libfreeaptx pavucontrol easyeffects \
   bluez bluez-utils blueman cups hplip brightnessctl network-manager-applet \
-  xdg-user-dirs man-db man-pages dosfstools e2fsprogs bash-completion \
+  xdg-user-dirs man-db man-pages dosfstools e2fsprogs parted gparted bash-completion \
   snapper snap-pac grub-btrfs inotify-tools pacman-contrib reflector zram-generator \
-  cmake ninja clang llvm lld gdb lldb jdk-openjdk lua python python-pip neovim kate \
+  cmake ninja clang llvm lld gdb lldb valgrind perf jdk-openjdk lua python python-pip neovim kate tmux \
   hyprland hyprpaper hyprlock hypridle hyprpicker hyprsunset waybar kitty rofi-wayland dunst zenity \
   xdg-desktop-portal-hyprland xdg-desktop-portal-gtk polkit-kde-agent grim slurp flameshot obs-studio wl-clipboard cliphist \
   ttf-jetbrains-mono-nerd noto-fonts noto-fonts-cjk noto-fonts-emoji papirus-icon-theme \
   thunar thunar-archive-plugin thunar-volman gvfs tumbler p7zip unrar tar unzip zip galculator \
   btop nvtop smartmontools baobab ncdu zathura zathura-pdf-mupdf fastfetch pkgfile \
-  firefox steam gamescope mangohud lib32-mangohud gamemode lib32-gamemode prism-launcher \
+  firefox chromium qbittorrent handbrake ffmpeg \
+  gst-plugins-good gst-plugins-bad gst-plugins-ugly gst-libav \
+  steam gamescope mangohud lib32-mangohud gamemode lib32-gamemode prism-launcher \
   wine-staging winetricks wine-mono giflib lib32-giflib libreoffice-fresh mpv loupe gimp keepassxc obsidian \
-  qemu-full virt-manager virt-viewer dnsmasq vde2 bridge-utils libguestfs \
+  qemu-full virt-manager virt-viewer dnsmasq vde2 bridge-utils libguestfs wireshark-qt \
   docker docker-compose nginx openssh lynis tpm2-tools
 
 # 5. AUR Packages (via yay)
 yay -S --needed --noconfirm \
   openrazer-meta polychromatic \
   flutter-bin \
+  android-studio \
+  coolercontrol \
+  corectrl \
+  gwe \
+  lact \
   vscodium-bin \
   rustdesk-bin \
   immich-cli \
@@ -186,6 +193,10 @@ yay -S --needed --noconfirm \
 flatpak install -y flathub \
   com.heroicgameslauncher.hgl \
   com.discordapp.Discord \
+  com.stremio.Stremio \
+  com.bambulab.BambuStudio \
+  com.github.tchx84.Flatseal \
+  com.github.iwalton3.jellyfin-media-player \
   org.onlyoffice.desktopeditors \
   org.signal.Signal \
   com.viber.Viber \
@@ -199,6 +210,8 @@ flatpak install -y flathub \
 sudo systemctl enable bluetooth.service
 sudo systemctl enable cups.service
 sudo systemctl enable sshd.service
+sudo systemctl enable coolercontrold.service
+sudo systemctl enable lactd.service
 sudo systemctl enable --now systemd-oomd.service
 sudo systemctl enable --now reflector.timer
 sudo systemctl enable --now snapper-timeline.timer
@@ -208,7 +221,7 @@ sudo systemctl enable --now btrfs-scrub@-.timer
 sudo systemctl enable --now libvirtd.service
 sudo systemctl enable --now docker.service
 
-sudo usermod -aG libvirt,kvm,docker,plugdev,gamemode "$USER"
+sudo usermod -aG libvirt,kvm,docker,plugdev,gamemode,wireshark "$USER"
 xdg-user-dirs-update
 sudo pkgfile --update
 sudo grub-mkconfig -o /boot/grub/grub.cfg
@@ -230,6 +243,10 @@ sudo grub-mkconfig -o /boot/grub/grub.cfg
 # TASK: Configure per-window low-latency screen tearing for games in ~/.config/hypr/hyprland.conf: set general: allow_tearing = true and define windowrulev2 = immediate, class:^(steam_app_.*)$
 # TASK: Prepare for future HDR pipeline (when upgrading GPU): enable experimental-hdr option in Hyprland config and launch gamescope with '--hdr-enabled --hdr-sdr-content-nits 400'
 # TASK: Unmute HDMI/DP audio channels in ALSA using alsamixer (F6 -> select NVIDIA GPU -> toggle MM to OO on S/PDIF outputs)
+# TASK: Verify hardware video decoding and codecs using vainfo and ensure GStreamer/FFmpeg proprietary playback functions cleanly
+# TASK: Configure system clipboard sync in Neovim by setting vim.opt.clipboard = "unnamedplus" in ~/.config/nvim/init.lua
+# TASK: Configure Coolbits options in Xorg/NVIDIA settings to allow fan and clock offsets in GreenWithEnvy (GWE)
+# TASK: Configure OpenRGB udev access rules and set up fan/cooling profiles inside CoolerControl GUI
 # TASK: Configure compressed RAM swap by creating /etc/systemd/zram-generator.conf with zram-fraction=1.0 and compression-algorithm=zstd
 # TASK: Configure custom kernel versioning automation: create a pre-transaction pacman hook to archive /boot/vmlinuz-<version>, /boot/initramfs-<version>.img, and /usr/lib/modules/<version> prior to upgrades, keeping signed EFI binaries intact
 # TASK: Implement kernel retention policy: protect user-pinned fallback kernel from deletion, retain ~1-week, ~2-week, and ~1-month archived versions, and run grub-mkconfig to expose them under the GRUB menu
@@ -247,3 +264,4 @@ sudo grub-mkconfig -o /boot/grub/grub.cfg
 # TASK: Inject BetterDiscord into Flatpak/Native Discord using betterdiscordctl
 # TASK: Create isolated 'steam' user for running dedicated Palworld server (or deploy via Docker)
 # TASK: Configure Hyprland autostart scripts (hyprpaper, waybar, dunst, cliphist, polkit agent)
+# TASK: Enable numlock on boot
