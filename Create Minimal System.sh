@@ -80,6 +80,7 @@ efibootmgr \
 plymouth \
 os-prober \
 networkmanager \
+git \
 sudo
 
 swapon /mnt/swap/swapfile
