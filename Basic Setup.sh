@@ -189,7 +189,6 @@ wine-staging \
 winetricks \
 wine-mono \
 giflib \
-lib32-giflib \
 loupe \
 gimp \
 keepassxc \
@@ -199,7 +198,6 @@ virt-manager \
 virt-viewer \
 dnsmasq \
 vde2 \
-bridge-utils \
 libguestfs \
 wireshark-qt \
 docker \
@@ -208,7 +206,6 @@ nginx \
 openssh \
 lynis \
 tpm2-tools \
-openrazer-meta \
 wireless-regdb \
 lazygit \
 github-cli \
@@ -220,6 +217,8 @@ shellcheck \
 shfmt
 
 yay -S --needed --noconfirm \
+lib32-giflib \
+openrazer-meta \
 wl-clip-persist \
 bambu-studio-bin \
 notepadqq \
