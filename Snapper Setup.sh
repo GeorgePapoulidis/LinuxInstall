@@ -3,25 +3,33 @@ set -euo pipefail
 
 source "Config.env"
 
-sudo pacman -S --noconfirm --needed snapper grub-btrfs inotify-tools
+sudo pacman -S --noconfirm --needed snapper grub-btrfs inotify-tools snap-pac sbsigntools mokutil openssl linux-headers
 
 sudo btrfs quota enable /
 sudo btrfs quota enable /home
 
-sudo umount /.snapshots
+sudo umount /.snapshots 2>/dev/null || true
 sudo rm -rf /.snapshots
 sudo snapper -c root create-config /
 sudo btrfs subvolume delete /.snapshots
 sudo mkdir -p /.snapshots
-sudo mount /.snapshots
+if grep -q "[[:space:]]/\.snapshots[[:space:]]" /etc/fstab; then
+    sudo mount /.snapshots
+else
+    sudo btrfs subvolume create /.snapshots
+fi
 sudo chmod 750 /.snapshots
 
-sudo umount /home/.snapshots
+sudo umount /home/.snapshots 2>/dev/null || true
 sudo rm -rf /home/.snapshots
 sudo snapper -c home create-config /home
 sudo btrfs subvolume delete /home/.snapshots
 sudo mkdir -p /home/.snapshots
-sudo mount /home/.snapshots
+if grep -q "[[:space:]]/home/\.snapshots[[:space:]]" /etc/fstab; then
+    sudo mount /home/.snapshots
+else
+    sudo btrfs subvolume create /home/.snapshots
+fi
 sudo chmod 750 /home/.snapshots
 
 sudo sed -i \
@@ -56,13 +64,104 @@ sudo systemctl enable --now snapper-timeline.timer
 sudo systemctl enable --now snapper-cleanup.timer
 sudo systemctl enable --now grub-btrfsd.service
 
-sudo pacman -S --noconfirm --needed snap-pac
+sudo tee /usr/local/bin/flatpak >/dev/null << 'EOF'
+#!/usr/bin/env bash
+set -eo pipefail
+
+REAL_FLATPAK="/usr/bin/flatpak"
+CMD="${1:-}"
+
+case "$CMD" in
+    install|update|uninstall|remove)
+        SNAP_NUM=$(sudo snapper -c root create -t pre -p -c number -d "flatpak $CMD")
+        trap 'sudo snapper -c root create -t post --pre-number "$SNAP_NUM" -c number -d "flatpak $CMD"' EXIT
+        ;;
+esac
+
+"$REAL_FLATPAK" "$@"
+EOF
+sudo chmod 755 /usr/local/bin/flatpak
+
+MOK_DIR="/home/${USERNAME}/Security/MOK"
+sudo mkdir -p "$MOK_DIR"
+
+if [[ ! -f "${MOK_DIR}/MOK.priv" ]]; then
+    sudo openssl req -new -x509 -newkey rsa:4096 \
+        -keyout "${MOK_DIR}/MOK.priv" \
+        -outform DER -out "${MOK_DIR}/MOK.der" \
+        -nodes -days 36500 \
+        -subj "/CN=${USERNAME} Arch Kernel Signing Key/"
+    sudo openssl x509 -inform DER -in "${MOK_DIR}/MOK.der" -out "${MOK_DIR}/MOK.pem"
+fi
+
+sudo chown -R "${USERNAME}:${USERNAME}" "/home/${USERNAME}/Security"
+sudo chmod 700 "$MOK_DIR"
+sudo chmod 600 "${MOK_DIR}/MOK.priv"
+sudo chmod 644 "${MOK_DIR}/MOK.der" "${MOK_DIR}/MOK.pem"
+
+# BIOS / FIRMWARE ACTION REQUIRED:
+# 1. Run `sudo mokutil --import /home/$USERNAME/Security/MOK/MOK.der` and set a one-time password.
+# 2. Reboot into UEFI/BIOS settings: disable CSM/Legacy Boot and enable Secure Boot (Standard Mode).
+# 3. If not using `shim-signed` with GRUB, enroll `/home/$USERNAME/Security/MOK/MOK.der` into the UEFI DB (Signature Database) directly inside your BIOS Key Management menu, or ensure your bootloader delegates to MOKManager on reboot to select "Enroll MOK" -> "Continue" -> enter your one-time password.
+
+sudo mkdir -p /etc/dkms/framework.conf.d
+sudo tee /etc/dkms/framework.conf.d/signing.conf >/dev/null << EOF
+mok_signing_key="${MOK_DIR}/MOK.priv"
+mok_certificate="${MOK_DIR}/MOK.der"
+sign_file="/usr/lib/modules/\$kernelver/build/scripts/sign-file"
+EOF
+
+sudo tee /usr/local/sbin/sign-kernel-and-modules >/dev/null << EOF
+#!/usr/bin/env bash
+set -euo pipefail
+
+MOK_PRIV="${MOK_DIR}/MOK.priv"
+MOK_DER="${MOK_DIR}/MOK.der"
+MOK_PEM="${MOK_DIR}/MOK.pem"
+
+[[ -f "\$MOK_PRIV" && -f "\$MOK_DER" ]] || exit 0
+
+for kdir in /usr/lib/modules/*; do
+    [[ -d "\$kdir" ]] || continue
+    kver="\${kdir##*/}"
+    [[ "\$kver" == ".staging" || "\$kver" == ".archived" ]] && continue
+
+    SIGN_FILE="\${kdir}/build/scripts/sign-file"
+    if [[ -x "\$SIGN_FILE" ]]; then
+        while IFS= read -r -d '' mod; do
+            if [[ "\$mod" == *.ko ]]; then
+                "\$SIGN_FILE" sha512 "\$MOK_PRIV" "\$MOK_DER" "\$mod"
+            elif [[ "\$mod" == *.ko.zst ]]; then
+                zstd -dfq "\$mod" -o "\${mod%.zst}"
+                "\$SIGN_FILE" sha512 "\$MOK_PRIV" "\$MOK_DER" "\${mod%.zst}"
+                zstd -fq --rm "\${mod%.zst}" -o "\$mod"
+            elif [[ "\$mod" == *.ko.xz ]]; then
+                xz -dfk "\$mod"
+                "\$SIGN_FILE" sha512 "\$MOK_PRIV" "\$MOK_DER" "\${mod%.xz}"
+                xz -fz "\${mod%.xz}"
+            fi
+        done < <(find "\$kdir/updates" "\$kdir/extramodules" "\$kdir/kernel/drivers/media" -type f \( -name "*.ko" -o -name "*.ko.zst" -o -name "*.ko.xz" \) -print0 2>/dev/null || true)
+    fi
+done
+
+for vmlinuz in /boot/vmlinuz-*; do
+    [[ -f "\$vmlinuz" ]] || continue
+    if ! sbverify --cert "\$MOK_PEM" "\$vmlinuz" >/dev/null 2>&1; then
+        sbsign --key "\$MOK_PRIV" --cert "\$MOK_PEM" --output "\${vmlinuz}.signed" "\$vmlinuz"
+        mv "\${vmlinuz}.signed" "\$vmlinuz"
+    fi
+done
+EOF
+sudo chmod 755 /usr/local/sbin/sign-kernel-and-modules
 
 sudo touch /etc/kernel-pinned.conf
 
 sudo tee /usr/local/sbin/kernel-archive-pre >/dev/null << 'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
+
+rm -rf /boot/.staging /usr/lib/modules/.staging
+mkdir -p /boot/.staging
 
 for vmlinuz in /boot/vmlinuz-*; do
     [[ -e "$vmlinuz" ]] || continue
@@ -76,39 +175,98 @@ for vmlinuz in /boot/vmlinuz-*; do
     [[ -n "$kver" ]] || continue
 
     if [[ -d "/usr/lib/modules/${kver}" ]]; then
-        cp -p "$vmlinuz" "/boot/vmlinuz-${kver}"
+        cp -p "$vmlinuz" "/boot/.staging/vmlinuz.tmp"
+        echo "$name" > "/boot/.staging/orig-name"
+        echo "$kver" > "/boot/.staging/kver"
 
         if [[ -f "/boot/initramfs-${name}.img" ]]; then
-            cp -p "/boot/initramfs-${name}.img" "/boot/initramfs-${kver}.img"
+            cp -p "/boot/initramfs-${name}.img" "/boot/.staging/initramfs.img.tmp"
         fi
 
         if [[ -f "/boot/initramfs-${name}-fallback.img" ]]; then
-            cp -p "/boot/initramfs-${name}-fallback.img" "/boot/initramfs-${kver}-fallback.img"
+            cp -p "/boot/initramfs-${name}-fallback.img" "/boot/.staging/initramfs-fallback.img.tmp"
         fi
 
-        mkdir -p /usr/lib/modules/.archived
-        rm -rf "/usr/lib/modules/.archived/${kver}"
-        cp -a --reflink=always "/usr/lib/modules/${kver}" "/usr/lib/modules/.archived/${kver}"
+        cp -a --reflink=auto "/usr/lib/modules/${kver}" "/usr/lib/modules/.staging"
+        break
     fi
 done
 EOF
-
 sudo chmod 755 /usr/local/sbin/kernel-archive-pre
+
+sudo tee /usr/local/sbin/kernel-archive-recover >/dev/null << 'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ -f /boot/.staging/kver ]]; then
+    kver=$(cat /boot/.staging/kver)
+    orig_name="linux"
+    [[ -f /boot/.staging/orig-name ]] && orig_name=$(cat /boot/.staging/orig-name)
+
+    if [[ -d /usr/lib/modules/.staging && ! -d "/usr/lib/modules/${kver}" ]]; then
+        cp -a --reflink=auto /usr/lib/modules/.staging "/usr/lib/modules/${kver}"
+    fi
+
+    if [[ -f /boot/.staging/vmlinuz.tmp && ! -f "/boot/vmlinuz-${orig_name}" ]]; then
+        cp -p /boot/.staging/vmlinuz.tmp "/boot/vmlinuz-${orig_name}"
+    fi
+    if [[ -f /boot/.staging/initramfs.img.tmp && ! -f "/boot/initramfs-${orig_name}.img" ]]; then
+        cp -p /boot/.staging/initramfs.img.tmp "/boot/initramfs-${orig_name}.img"
+    fi
+    if [[ -f /boot/.staging/initramfs-fallback.img.tmp && ! -f "/boot/initramfs-${orig_name}-fallback.img" ]]; then
+        cp -p /boot/.staging/initramfs-fallback.img.tmp "/boot/initramfs-${orig_name}-fallback.img"
+    fi
+fi
+EOF
+sudo chmod 755 /usr/local/sbin/kernel-archive-recover
+
+sudo tee /etc/systemd/system/kernel-archive-recover.service >/dev/null << 'EOF'
+[Unit]
+Description=Recover interrupted kernel upgrade from staging
+DefaultDependencies=no
+After=local-fs.target
+Before=systemd-modules-load.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/kernel-archive-recover
+
+[Install]
+WantedBy=sysinit.target
+EOF
+sudo systemctl enable kernel-archive-recover.service
 
 sudo tee /usr/local/sbin/kernel-archive-post >/dev/null << 'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [[ -d /usr/lib/modules/.archived ]]; then
-    for moddir in /usr/lib/modules/.archived/*; do
-        [[ -d "$moddir" ]] || continue
-        kver="${moddir##*/}"
-        if [[ ! -d "/usr/lib/modules/${kver}" ]]; then
-            mv "$moddir" "/usr/lib/modules/${kver}"
-        else
-            rm -rf "$moddir"
+/usr/local/sbin/sign-kernel-and-modules
+
+if [[ -f /boot/.staging/vmlinuz.tmp ]]; then
+    kver=""
+    [[ -f /boot/.staging/kver ]] && kver=$(cat /boot/.staging/kver)
+    if [[ -z "$kver" ]]; then
+        kver=$(file -bL /boot/.staging/vmlinuz.tmp | grep -oP 'version \K[^ ]+' || true)
+    fi
+
+    if [[ -n "$kver" ]]; then
+        if [[ -d /usr/lib/modules/.staging ]]; then
+            if [[ ! -d "/usr/lib/modules/${kver}" ]]; then
+                mv /usr/lib/modules/.staging "/usr/lib/modules/${kver}"
+            else
+                rm -rf /usr/lib/modules/.staging
+            fi
         fi
-    done
+
+        mv /boot/.staging/vmlinuz.tmp "/boot/vmlinuz-${kver}"
+        if [[ -f /boot/.staging/initramfs.img.tmp ]]; then
+            mv /boot/.staging/initramfs.img.tmp "/boot/initramfs-${kver}.img"
+        fi
+        if [[ -f /boot/.staging/initramfs-fallback.img.tmp ]]; then
+            mv /boot/.staging/initramfs-fallback.img.tmp "/boot/initramfs-${kver}-fallback.img"
+        fi
+    fi
+    rm -rf /boot/.staging /usr/lib/modules/.staging
 fi
 
 declare -A active_kvers=()
@@ -126,7 +284,7 @@ if [[ -f /etc/kernel-pinned.conf ]]; then
     while IFS= read -r line; do
         line="${line%%#*}"
         line="${line#"${line%%[![:space:]]*}"}"
-        line="${line%"${line##*[![:space:]]}"}"
+        line="${line\%"${line##*[![:space:]]}"}"
         [[ -n "$line" ]] && pinned_kvers["$line"]=1
     done < /etc/kernel-pinned.conf
 fi
@@ -142,7 +300,7 @@ for vmlinuz in /boot/vmlinuz-*; do
             rm -f "/boot/vmlinuz-${kver}" "/boot/initramfs-${kver}.img" "/boot/initramfs-${kver}-fallback.img"
             continue
         fi
-        archive_mtime["$kver"]=$(stat -c %Y "$vmlinuz")
+        archive_mtime["$kver"]=$(stat -c \%Y "$vmlinuz")
     fi
 done
 
@@ -186,7 +344,6 @@ done
 
 grub-mkconfig -o /boot/grub/grub.cfg
 EOF
-
 sudo chmod 755 /usr/local/sbin/kernel-archive-post
 
 sudo mkdir -p /etc/pacman.d/hooks
@@ -199,7 +356,7 @@ Type = Path
 Target = usr/lib/modules/*/vmlinuz
 
 [Action]
-Description = Archiving current kernel, uncompressed initramfs, and signed modules...
+Description = Staging current kernel, initramfs, and modules to single temporary backup...
 When = PreTransaction
 Exec = /usr/local/sbin/kernel-archive-pre
 EOF
@@ -212,12 +369,18 @@ Operation = Remove
 Type = Path
 Target = usr/lib/modules/*/vmlinuz
 Target = usr/src/*/dkms.conf
+Target = usr/lib/modules/*/updates/*
+Target = usr/lib/modules/*/extramodules/*
 
 [Action]
-Description = Pruning archived kernels and updating GRUB menu...
+Description = Signing kernels/modules, promoting staged backup, and updating GRUB...
 When = PostTransaction
 Exec = /usr/local/sbin/kernel-archive-post
 EOF
+
+sudo /usr/local/sbin/sign-kernel-and-modules
+sudo mkinitcpio -P
+sudo grub-mkconfig -o /boot/grub/grub.cfg
 
 chmod +x "Nvim Setup.sh"
 echo "Executing Nvim Setup.sh"
