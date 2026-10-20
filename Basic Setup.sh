@@ -26,15 +26,15 @@ sudo sed -i \
 sudo sed -i 's/^#MAKEFLAGS=.*/MAKEFLAGS="-j$(nproc)"/' /etc/makepkg.conf
 
 sudo pacman -Syu --needed --noconfirm base-devel git
-git clone https://aur.archlinux.org/paru-bin.git /tmp/paru-bin
-(cd /tmp/paru-bin && makepkg -si --noconfirm)
-sudo sed -i 's/^#SudoLoop/SudoLoop/' /etc/paru.conf
-rm -rf /tmp/paru-bin
+git clone https://aur.archlinux.org/yay-bin.git /tmp/yay-bin
+(cd /tmp/yay-bin && makepkg -si --noconfirm)
+rm -rf /tmp/yay-bin
+yay --sudoloop --save
 
 sudo pacman -S --needed --noconfirm flatpak
 sudo flatpak remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
 
-paru -S --needed --noconfirm \
+yay -S --needed --noconfirm \
 nvidia-580xx-dkms \
 nvidia-580xx-utils \
 lib32-nvidia-580xx-utils \
@@ -219,7 +219,7 @@ stylua \
 shellcheck \
 shfmt
 
-paru -S --needed --noconfirm \
+yay -S --needed --noconfirm \
 wl-clip-persist \
 bambu-studio-bin \
 notepadqq \
