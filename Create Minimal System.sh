@@ -83,6 +83,11 @@ sudo
 swapon /mnt/swap/swapfile
 genfstab -U /mnt >> /mnt/etc/fstab
 
+read -rsp "Enter password for root: " ROOT_PASSWORD
+echo
+read -rsp "Enter password for $USERNAME: " USER_PASSWORD
+echo
+
 arch-chroot -S /mnt /bin/bash 3<&0 << CHROOT
 sed -i '/^#en_GB.UTF-8 UTF-8/s/^#//' /etc/locale.gen
 sed -i '/^#el_GR.UTF-8 UTF-8/s/^#//' /etc/locale.gen
@@ -110,20 +115,12 @@ sed -i 's/^HOOKS=.*/HOOKS=(base systemd plymouth autodetect microcode modconf km
 
 plymouth-set-default-theme -R bgrt
 
-echo -n "Enter password for root: " >&3
-read -s -u 3 ROOT_PASSWORD
-echo >&3
-echo "root:\$ROOT_PASSWORD" | chpasswd
-unset ROOT_PASSWORD
+echo "root:${ROOT_PASSWORD}" | chpasswd
 
 useradd -m -s /bin/bash "$USERNAME"
 usermod -aG wheel "$USERNAME"
 
-echo -n "Enter password for $USERNAME: " >&3
-read -s -u 3 USER_PASSWORD
-echo >&3
-echo "$USERNAME:\$USER_PASSWORD" | chpasswd
-unset USER_PASSWORD
+echo "$USERNAME:${USER_PASSWORD}" | chpasswd
 
 echo "%wheel ALL=(ALL:ALL) ALL" > /etc/sudoers.d/00-wheel
 chmod 0440 /etc/sudoers.d/00-wheel
@@ -148,6 +145,9 @@ systemctl enable systemd-timesyncd.service
 
 CHROOT
 
+unset ROOT_PASSWORD USER_PASSWORD
+
 swapoff /mnt/swap/swapfile
 umount -R /mnt
-reboot
+#reboot
+#
