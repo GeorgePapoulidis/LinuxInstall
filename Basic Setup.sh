@@ -285,7 +285,7 @@ sudo systemctl enable sshd.service
 sudo systemctl enable --now coolercontrold.service
 sudo systemctl enable --now openrgb.service
 sudo systemctl enable --now lactd.service
-sudo systemctl enable --now nvidia-persistenced.service
+sudo systemctl enable nvidia-persistenced.service
 sudo systemctl enable nvidia-suspend.service nvidia-hibernate.service nvidia-resume.service
 sudo systemctl enable --now systemd-oomd.service
 sudo systemctl enable --now reflector.timer
