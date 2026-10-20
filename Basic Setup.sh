@@ -214,12 +214,12 @@ lldb \
 luarocks \
 stylua \
 shellcheck \
-bambustudio-bin \
 shfmt
 
 yay -S --needed --noconfirm \
 lib32-giflib \
 openrazer-meta \
+bambustudio-bin \
 wl-clip-persist \
 notepadqq \
 polychromatic \
