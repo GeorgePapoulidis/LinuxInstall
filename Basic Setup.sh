@@ -219,6 +219,7 @@ shfmt
 yay -S --needed --noconfirm \
 lib32-giflib \
 openrazer-meta \
+droidcam \
 bambustudio-bin \
 wl-clip-persist \
 notepadqq \
