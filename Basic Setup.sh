@@ -214,12 +214,15 @@ lldb \
 luarocks \
 stylua \
 shellcheck \
+libusbmuxd \
+android-tools \
 shfmt
 
 yay -S --needed --noconfirm \
 lib32-giflib \
 openrazer-meta \
 droidcam \
+v4l2loopback-dc-dkms \
 bambustudio-bin \
 wl-clip-persist \
 notepadqq \
@@ -255,6 +258,20 @@ sudo tee /etc/xdg/reflector/reflector.conf << 'EOF'
 --latest 15
 --sort rate
 EOF
+
+echo "v4l2loopback_dc" | sudo tee /etc/modules-load.d/droidcam.conf >/dev/null
+echo "options v4l2loopback_dc width=1920 height=1080" | sudo tee /etc/modprobe.d/droidcam.conf >/dev/null
+
+mkdir -p "/home/${USERNAME}/.config"
+cat << 'EOF' > "/home/${USERNAME}/.config/droidcam"
+ip=192.168.1.10
+port=4747
+audio=0
+video=1
+size=1920x1080
+fps=60
+EOF
+chown "${USERNAME}:${USERNAME}" "/home/${USERNAME}/.config/droidcam"
 
 sudo mkdir -p /etc/systemd/system/paccache.service.d
 sudo tee /etc/systemd/system/paccache.service.d/override.conf << 'EOF'
