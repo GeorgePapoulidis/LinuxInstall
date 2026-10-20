@@ -44,6 +44,7 @@ libva-nvidia-driver
 sudo pacman -S --needed --noconfirm \
 base-devel \
 git \
+tmux \
 flatpak \
 egl-wayland \
 openbsd-netcat \
