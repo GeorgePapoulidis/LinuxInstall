@@ -229,7 +229,6 @@ coolercontrol-bin \
 mkinitcpio-sd-numlock \
 vscodium-bin \
 rustdesk-bin \
-immich-cli \
 betterdiscordctl
 
 flatpak install -y flathub \
