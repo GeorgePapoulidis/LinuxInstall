@@ -11,6 +11,8 @@ wipefs -af "${DISK}"p* 2>/dev/null || true
 wipefs -af "$DISK"
 sgdisk --zap-all "$DISK"
 
+blkdiscard -f "$DISK"
+
 sgdisk -n 1:0:+"$EFI_SIZE" -t 1:ef00 -c 1:"$PARTNAME_EFI" "$DISK"
 sgdisk -n 2:0:+"$BOOT_SIZE" -t 2:ea00 -c 2:"$PARTNAME_BOOT" "$DISK"
 sgdisk -n 3:0:0 -t 3:8309 -c 3:"$PARTNAME_LUKS" "$DISK"
